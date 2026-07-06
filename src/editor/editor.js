@@ -39,31 +39,34 @@ function loadImage(dataUrl) {
 }
 
 async function stitchShots(capture) {
-  const { shots, offsets, viewportHeight, viewportWidth, devicePixelRatio, scrollHeight } =
-    capture;
+  const { shots, devicePixelRatio, scrollHeight } = capture;
   const images = await Promise.all(shots.map(loadImage));
 
   const dpr = devicePixelRatio || 1;
-  canvas.width = Math.round(viewportWidth * dpr);
+  canvas.width = images[0].width;
   canvas.height = Math.round(scrollHeight * dpr);
 
+  // Se apila cada captura usando su alto real de píxeles (no el calculado a partir de
+  // viewportHeight * devicePixelRatio): en pantallas con escalado fraccional (125%/150%
+  // en Windows) esos dos valores pueden diferir por 1px, dejando una línea entre tramos.
+  let cursorY = 0;
   images.forEach((img, i) => {
-    const destY = Math.round(offsets[i] * dpr);
-    if (i === 0) {
-      ctx.drawImage(img, 0, destY);
+    const isLast = i === images.length - 1;
+    if (!isLast) {
+      ctx.drawImage(img, 0, cursorY);
+      cursorY += img.height;
       return;
     }
-    const prevBottom = Math.round((offsets[i - 1] + viewportHeight) * dpr);
-    if (destY >= prevBottom) {
-      ctx.drawImage(img, 0, destY);
+    // el último tramo puede solaparse con el anterior (el scroll se recortó al fondo
+    // real de la página): solo se dibuja la porción inferior que falta para llenar
+    // el lienzo, tomada del fondo de esta captura.
+    const remaining = canvas.height - cursorY;
+    if (remaining >= img.height) {
+      ctx.drawImage(img, 0, cursorY);
       return;
     }
-    // el último tramo se solapa con el anterior (se recortó al fondo real de la página):
-    // solo se dibuja la porción inferior que aún no se había pintado.
-    const overlap = prevBottom - destY;
-    const sourceY = overlap;
-    const sourceHeight = img.height - sourceY;
-    ctx.drawImage(img, 0, sourceY, img.width, sourceHeight, 0, prevBottom, img.width, sourceHeight);
+    const sourceY = img.height - remaining;
+    ctx.drawImage(img, 0, sourceY, img.width, remaining, 0, cursorY, img.width, remaining);
   });
 }
 
