@@ -1,0 +1,99 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #111827;
+  color: #e5e7eb;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: #1f2937;
+  border-bottom: 1px solid #374151;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: white;
+}
+
+.more-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 20px;
+  background: #1f2937;
+  border-bottom: 1px solid #374151;
+  font-size: 13px;
+}
+
+.more-panel.hidden {
+  display: none;
+}
+
+.field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-row label {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.field-row input[type="text"] {
+  min-width: 320px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #4b5563;
+  background: #111827;
+  color: #e5e7eb;
+}
+
+.canvas-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+#stitched-canvas {
+  max-width: 100%;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  background: white;
+}

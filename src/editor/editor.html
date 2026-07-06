@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>ScrollShot — Editor</title>
+    <link rel="stylesheet" href="editor.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">ScrollShot</div>
+      <div class="actions">
+        <button id="toggle-more" class="btn-ghost">Más ▾</button>
+        <button id="export-png" class="btn-ghost">Descargar PNG</button>
+        <button id="export-pdf" class="btn-primary">Descargar PDF</button>
+      </div>
+    </header>
+
+    <section id="more-panel" class="more-panel hidden">
+      <label>
+        <input type="checkbox" id="annotate-enabled" checked />
+        Incluir URL y fecha/hora de captura al exportar
+      </label>
+      <div class="field-row">
+        <label for="page-url">URL de la captura</label>
+        <input type="text" id="page-url" />
+      </div>
+      <div class="field-row">
+        <label for="captured-at">Fecha y hora de captura</label>
+        <input type="text" id="captured-at" />
+      </div>
+    </section>
+
+    <main class="canvas-wrap">
+      <canvas id="stitched-canvas"></canvas>
+    </main>
+
+    <script src="../../lib/jspdf.umd.min.js"></script>
+    <script src="editor.js"></script>
+  </body>
+</html>
