@@ -9,6 +9,7 @@ const pageUrlInput = document.getElementById("page-url");
 const capturedAtInput = document.getElementById("captured-at");
 const exportPngBtn = document.getElementById("export-png");
 const exportPdfBtn = document.getElementById("export-pdf");
+const copyImageBtn = document.getElementById("copy-image");
 
 function formatLocalDateTime(isoString) {
   const d = new Date(isoString);
@@ -83,7 +84,7 @@ function buildAnnotationText() {
   return `${pageUrlInput.value}   •   ${capturedAtInput.value}`;
 }
 
-function exportPng() {
+function buildFinalCanvas() {
   const finalCanvas = document.createElement("canvas");
   finalCanvas.width = canvas.width;
   const bandHeight = annotateEnabled.checked ? 34 : 0;
@@ -93,11 +94,21 @@ function exportPng() {
   if (annotateEnabled.checked) {
     drawAnnotationBand(fctx, finalCanvas.width, canvas.height, buildAnnotationText());
   }
+  return finalCanvas;
+}
 
+function exportPng() {
+  const finalCanvas = buildFinalCanvas();
   const link = document.createElement("a");
   link.download = "scrollshot.png";
   link.href = finalCanvas.toDataURL("image/png");
   link.click();
+}
+
+async function copyImage() {
+  const finalCanvas = buildFinalCanvas();
+  const blob = await new Promise((resolve) => finalCanvas.toBlob(resolve, "image/png"));
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
 }
 
 function exportPdf() {
@@ -126,6 +137,19 @@ function exportPdf() {
 moreBtn.addEventListener("click", () => morePanel.classList.toggle("hidden"));
 exportPngBtn.addEventListener("click", exportPng);
 exportPdfBtn.addEventListener("click", exportPdf);
+copyImageBtn.addEventListener("click", async () => {
+  const original = copyImageBtn.textContent;
+  try {
+    await copyImage();
+    copyImageBtn.textContent = "¡Copiado!";
+  } catch (err) {
+    copyImageBtn.textContent = "Error al copiar";
+  } finally {
+    setTimeout(() => {
+      copyImageBtn.textContent = original;
+    }, 1500);
+  }
+});
 
 (async function init() {
   const capture = await loadCapture();

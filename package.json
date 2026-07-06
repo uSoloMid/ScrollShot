@@ -4,9 +4,6 @@
   "private": true,
   "description": "Extensión de Chrome (Manifest V3) para captura de página completa con anotación de URL/fecha y exportación a PDF/PNG.",
   "license": "MIT",
-  "scripts": {
-    "icons": "node scripts/generate-icons.js"
-  },
   "dependencies": {
     "jspdf": "^4.2.1"
   }

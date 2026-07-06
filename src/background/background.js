@@ -18,7 +18,21 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["src/content/content-script.js"],
+    });
+  } catch (err) {
+    throw new Error(
+      "No se puede capturar esta página (restringida por Chrome, ej. chrome://, Web Store o un PDF)."
+    );
+  }
+}
+
 async function captureFullPage(tabId, tab) {
+  await ensureContentScript(tabId);
   const metrics = await sendToTab(tabId, { type: "GET_METRICS" });
   const { scrollHeight, viewportHeight, viewportWidth, devicePixelRatio, initialScrollY, title } =
     metrics;
@@ -31,12 +45,20 @@ async function captureFullPage(tabId, tab) {
   offsets.push(maxScrollTop);
 
   const shots = [];
-  for (let i = 0; i < offsets.length; i++) {
-    await sendToTab(tabId, { type: "SCROLL_TO", y: offsets[i] });
-    await wait(SETTLE_DELAY_MS);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-    shots.push(dataUrl);
-    if (i < offsets.length - 1) await wait(CAPTURE_INTERVAL_MS);
+  try {
+    for (let i = 0; i < offsets.length; i++) {
+      await sendToTab(tabId, { type: "SCROLL_TO", y: offsets[i] });
+      // A partir de la 2ª captura se ocultan los elementos fixed/sticky (headers, banners)
+      // para que no queden pegados y repetidos en cada tramo del canvas final.
+      if (i === 1) await sendToTab(tabId, { type: "HIDE_FIXED_ELEMENTS" });
+      chrome.action.setBadgeText({ text: `${i + 1}/${offsets.length}`, tabId });
+      await wait(SETTLE_DELAY_MS);
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      shots.push(dataUrl);
+      if (i < offsets.length - 1) await wait(CAPTURE_INTERVAL_MS);
+    }
+  } finally {
+    if (offsets.length > 1) await sendToTab(tabId, { type: "SHOW_FIXED_ELEMENTS" }).catch(() => {});
   }
 
   await sendToTab(tabId, { type: "SCROLL_TO", y: initialScrollY });
@@ -58,18 +80,18 @@ async function captureFullPage(tabId, tab) {
   await chrome.tabs.create({ url: chrome.runtime.getURL("src/editor/editor.html") });
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type !== "CAPTURE_START") return;
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab?.id) return;
 
-  (async () => {
-    try {
-      const tab = await chrome.tabs.get(message.tabId);
-      await captureFullPage(message.tabId, tab);
-      sendResponse({ ok: true });
-    } catch (err) {
-      sendResponse({ ok: false, error: err.message });
-    }
-  })();
+  chrome.action.setBadgeBackgroundColor({ color: "#2563eb", tabId: tab.id });
+  chrome.action.setBadgeText({ text: "●", tabId: tab.id });
 
-  return true;
+  try {
+    await captureFullPage(tab.id, tab);
+    chrome.action.setBadgeText({ text: "", tabId: tab.id });
+  } catch (err) {
+    chrome.action.setBadgeBackgroundColor({ color: "#dc2626", tabId: tab.id });
+    chrome.action.setBadgeText({ text: "!", tabId: tab.id });
+    setTimeout(() => chrome.action.setBadgeText({ text: "", tabId: tab.id }), 4000);
+  }
 });
