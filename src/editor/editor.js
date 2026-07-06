@@ -70,116 +70,132 @@ async function stitchShots(capture) {
   });
 }
 
-async function stitchContainerShots(capture) {
+// Combina el scroll normal de la página con el scroll interno de un contenedor
+// (tabla con scroll propio, vertical u horizontal) detectado dentro de ella. Todos
+// los pasos exteriores se apilan como en stitchShots; en el paso donde vive el
+// contenedor, esa captura se reemplaza por su propia franja de arriba/abajo más
+// las páginas de su scroll interno.
+async function stitchHybrid(capture) {
   const {
-    shots,
-    offsets,
-    viewportWidth,
-    viewportHeight,
-    devicePixelRatio,
+    outerShots,
+    outerOffsets,
+    containerSubShots,
+    containerOffsets,
+    containerStepIndex,
+    containerAxis,
     containerRect,
-    containerScrollHeight,
-    containerClientHeight,
+    containerScrollSize,
+    containerClientSize,
+    devicePixelRatio,
+    scrollHeight,
   } = capture;
-  const images = await Promise.all(shots.map(loadImage));
 
   const dpr = devicePixelRatio || 1;
-  const rectTop = Math.round(containerRect.top * dpr);
-  const rectLeft = Math.round(containerRect.left * dpr);
-  const rectWidth = Math.round(containerRect.width * dpr);
-  const rectHeight = Math.round(containerRect.height * dpr);
-  const extra = Math.round((containerScrollHeight - containerClientHeight) * dpr);
+  const subImages = await Promise.all(containerSubShots.map(loadImage));
+  const outerImages = await Promise.all(
+    outerShots.map((shot) => (shot ? loadImage(shot) : null))
+  );
 
-  canvas.width = Math.round(viewportWidth * dpr);
-  canvas.height = Math.round(viewportHeight * dpr) + extra;
-
-  // El primer frame aporta todo lo estático fuera del contenedor (header, márgenes,
-  // footer). Lo que queda debajo del contenedor se reubica más abajo, empujado por
-  // el alto extra que agrega el contenido oculto por el scroll interno.
-  const first = images[0];
-  ctx.drawImage(first, 0, 0, first.width, rectTop, 0, 0, first.width, rectTop);
-  const belowHeight = first.height - (rectTop + rectHeight);
-  if (belowHeight > 0) {
-    ctx.drawImage(
-      first,
-      0, rectTop + rectHeight, first.width, belowHeight,
-      0, rectTop + rectHeight + extra, first.width, belowHeight
-    );
-  }
-
-  images.forEach((img, i) => {
-    const destY = rectTop + Math.round(offsets[i] * dpr);
-    if (i === 0) {
-      ctx.drawImage(img, rectLeft, rectTop, rectWidth, rectHeight, rectLeft, destY, rectWidth, rectHeight);
-      return;
-    }
-    const prevBottom = rectTop + Math.round((offsets[i - 1] + containerClientHeight) * dpr);
-    if (destY >= prevBottom) {
-      ctx.drawImage(img, rectLeft, rectTop, rectWidth, rectHeight, rectLeft, destY, rectWidth, rectHeight);
-      return;
-    }
-    // el último tramo se solapa con el anterior (se recortó al fondo real del contenedor):
-    // solo se dibuja la porción inferior que aún no se había pintado.
-    const overlap = prevBottom - destY;
-    const sourceY = rectTop + overlap;
-    const sourceHeight = rectHeight - overlap;
-    ctx.drawImage(img, rectLeft, sourceY, rectWidth, sourceHeight, rectLeft, prevBottom, rectWidth, sourceHeight);
-  });
-}
-
-async function stitchContainerXShots(capture) {
-  const { shots, offsets, viewportWidth, devicePixelRatio, containerRect, containerClientWidth } =
-    capture;
-  const images = await Promise.all(shots.map(loadImage));
-
-  const dpr = devicePixelRatio || 1;
-  const rectTop = Math.round(containerRect.top * dpr);
+  const first = subImages[0];
+  const frameWidth = (outerImages.find((img) => img) || first).width;
+  const rectTop =
+    Math.round(containerRect.top * dpr) - Math.round(outerOffsets[containerStepIndex] * dpr);
   const rectLeft = Math.round(containerRect.left * dpr);
   const rectWidth = Math.round(containerRect.width * dpr);
   const rectHeight = Math.round(containerRect.height * dpr);
 
-  const first = images[0];
-  const belowHeight = Math.max(first.height - (rectTop + rectHeight), 0);
+  const extra =
+    containerAxis === "y"
+      ? Math.round((containerScrollSize - containerClientSize) * dpr)
+      : rectHeight * (subImages.length - 1);
 
-  canvas.width = Math.round(viewportWidth * dpr);
-  canvas.height = rectTop + rectHeight * images.length + belowHeight;
+  canvas.width = frameWidth;
+  canvas.height = Math.round(scrollHeight * dpr) + extra;
 
-  // Franja estática de arriba (header, breadcrumbs) — una sola vez.
-  ctx.drawImage(first, 0, 0, first.width, rectTop, 0, 0, first.width, rectTop);
+  // Dibuja lo que falta del fondo de `img` (su porción inferior) para llenar
+  // exactamente lo que queda de lienzo, sin pasarse ni dejar huecos.
+  function drawRemainingBottom(img, destY) {
+    const remaining = canvas.height - destY;
+    if (remaining >= img.height) {
+      ctx.drawImage(img, 0, destY);
+      return img.height;
+    }
+    if (remaining <= 0) return 0;
+    const sourceY = img.height - remaining;
+    ctx.drawImage(img, 0, sourceY, img.width, remaining, 0, destY, img.width, remaining);
+    return remaining;
+  }
 
-  // En vez de ensanchar el lienzo, cada "página" de columnas del contenedor se
-  // apila hacia abajo, recortando las columnas que ya se vieron en la página anterior.
-  let cursorY = rectTop;
-  images.forEach((img, i) => {
-    if (i === 0) {
-      ctx.drawImage(img, 0, rectTop, first.width, rectHeight, 0, cursorY, first.width, rectHeight);
-      cursorY += rectHeight;
+  let cursorY = 0;
+  outerOffsets.forEach((_offset, i) => {
+    const isLastOuterStep = i === outerOffsets.length - 1;
+
+    if (i !== containerStepIndex) {
+      const img = outerImages[i];
+      if (!isLastOuterStep) {
+        ctx.drawImage(img, 0, cursorY);
+        cursorY += img.height;
+      } else {
+        cursorY += drawRemainingBottom(img, cursorY);
+      }
       return;
     }
 
-    // fondo de la fila: conserva los márgenes laterales del contenedor, si los hay
-    ctx.drawImage(first, 0, rectTop, first.width, rectHeight, 0, cursorY, first.width, rectHeight);
+    // Franja estática de arriba del contenedor (header, breadcrumbs) dentro de este paso.
+    ctx.drawImage(first, 0, 0, first.width, rectTop, 0, cursorY, first.width, rectTop);
+    cursorY += rectTop;
 
-    const prevRightLocal = offsets[i - 1] + containerClientWidth;
-    const overlap = Math.max(prevRightLocal - offsets[i], 0);
-    const overlapPx = Math.round(overlap * dpr);
-    const sx = rectLeft + overlapPx;
-    const sw = rectWidth - overlapPx;
-    if (sw > 0) {
-      ctx.drawImage(img, sx, rectTop, sw, rectHeight, sx, cursorY, sw, rectHeight);
+    if (containerAxis === "y") {
+      subImages.forEach((img, j) => {
+        if (j === 0) {
+          ctx.drawImage(img, rectLeft, rectTop, rectWidth, rectHeight, rectLeft, cursorY, rectWidth, rectHeight);
+          cursorY += rectHeight;
+          return;
+        }
+        const isLastSub = j === subImages.length - 1;
+        if (!isLastSub) {
+          ctx.drawImage(img, rectLeft, rectTop, rectWidth, rectHeight, rectLeft, cursorY, rectWidth, rectHeight);
+          cursorY += rectHeight;
+          return;
+        }
+        const prevLocalBottom = containerOffsets[j - 1] + containerClientSize;
+        const overlapPx = Math.round(Math.max(prevLocalBottom - containerOffsets[j], 0) * dpr);
+        const sh = rectHeight - overlapPx;
+        if (sh > 0) {
+          ctx.drawImage(img, rectLeft, rectTop + overlapPx, rectWidth, sh, rectLeft, cursorY, rectWidth, sh);
+          cursorY += sh;
+        }
+      });
+    } else {
+      subImages.forEach((img, j) => {
+        if (j === 0) {
+          ctx.drawImage(img, 0, rectTop, first.width, rectHeight, 0, cursorY, first.width, rectHeight);
+          cursorY += rectHeight;
+          return;
+        }
+        // fondo de la fila: conserva los márgenes laterales del contenedor, si los hay
+        ctx.drawImage(first, 0, rectTop, first.width, rectHeight, 0, cursorY, first.width, rectHeight);
+        const prevRightLocal = containerOffsets[j - 1] + containerClientSize;
+        const overlapPx = Math.round(Math.max(prevRightLocal - containerOffsets[j], 0) * dpr);
+        const sx = rectLeft + overlapPx;
+        const sw = rectWidth - overlapPx;
+        if (sw > 0) {
+          ctx.drawImage(img, sx, rectTop, sw, rectHeight, sx, cursorY, sw, rectHeight);
+        }
+        cursorY += rectHeight;
+      });
     }
-    cursorY += rectHeight;
-  });
 
-  // Franja estática de abajo (footer), tomada del primer frame y reubicada después
-  // de todas las páginas de columnas.
-  if (belowHeight > 0) {
-    ctx.drawImage(
-      first,
-      0, rectTop + rectHeight, first.width, belowHeight,
-      0, cursorY, first.width, belowHeight
-    );
-  }
+    // Franja estática de abajo del contenedor, tomada del mismo frame de referencia.
+    const belowHeight = first.height - (rectTop + rectHeight);
+    if (belowHeight > 0) {
+      const h = Math.min(belowHeight, Math.max(canvas.height - cursorY, 0));
+      if (h > 0) {
+        ctx.drawImage(first, 0, rectTop + rectHeight, first.width, h, 0, cursorY, first.width, h);
+        cursorY += h;
+      }
+    }
+  });
 }
 
 function drawAnnotationBand(targetCtx, width, y, text) {
@@ -270,10 +286,8 @@ copyImageBtn.addEventListener("click", async () => {
   const capture = await loadCapture();
   pageUrlInput.value = capture.pageUrl;
   capturedAtInput.value = formatLocalDateTime(capture.capturedAt);
-  if (capture.mode === "container") {
-    await stitchContainerShots(capture);
-  } else if (capture.mode === "container-x") {
-    await stitchContainerXShots(capture);
+  if (capture.mode === "hybrid") {
+    await stitchHybrid(capture);
   } else {
     await stitchShots(capture);
   }

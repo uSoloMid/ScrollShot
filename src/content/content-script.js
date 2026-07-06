@@ -69,6 +69,12 @@ if (!window.__scrollshotContentScriptLoaded) {
     }
 
     if (message.type === "GET_METRICS") {
+      const initialScrollY = window.scrollY;
+      // Se mide siempre desde el tope: así containerRect.top queda en el mismo
+      // sistema de coordenadas (absoluto dentro de la página) que usan los offsets
+      // del scroll normal, sin importar en qué punto estaba la página al capturar.
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+
       const docScrollHeight = Math.max(
         document.documentElement.scrollHeight,
         document.body.scrollHeight
@@ -79,60 +85,56 @@ if (!window.__scrollshotContentScriptLoaded) {
       const title = document.title;
 
       scrollContainer = null;
-      const pageItselfScrolls = docScrollHeight > viewportHeight + 1;
-      const found =
-        !pageItselfScrolls && message.detectInternalScroll ? findInternalScrollContainer() : null;
+      // La búsqueda de un contenedor con scroll propio ya no depende de si la
+      // página en sí necesita scroll: pueden coexistir (una página larga con una
+      // tabla angosta de scroll horizontal en medio, por ejemplo).
+      const found = message.detectInternalScroll ? findInternalScrollContainer() : null;
 
+      let container = null;
       if (found) {
         scrollContainer = found.el;
         const rect = scrollContainer.getBoundingClientRect();
         const containerRect = { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
-
-        if (found.axes.canY) {
-          sendResponse({
-            mode: "container",
-            viewportHeight,
-            viewportWidth,
-            devicePixelRatio,
-            title,
-            containerRect,
-            containerScrollTop: scrollContainer.scrollTop,
-            containerScrollHeight: scrollContainer.scrollHeight,
-            containerClientHeight: scrollContainer.clientHeight,
-          });
-        } else {
-          sendResponse({
-            mode: "container-x",
-            viewportWidth,
-            devicePixelRatio,
-            title,
-            containerRect,
-            containerScrollLeft: scrollContainer.scrollLeft,
-            containerScrollWidth: scrollContainer.scrollWidth,
-            containerClientWidth: scrollContainer.clientWidth,
-          });
-        }
-      } else {
-        sendResponse({
-          mode: "page",
-          scrollHeight: docScrollHeight,
-          viewportHeight,
-          viewportWidth,
-          devicePixelRatio,
-          initialScrollY: window.scrollY,
-          title,
-        });
+        const axis = found.axes.canY ? "y" : "x";
+        container =
+          axis === "y"
+            ? {
+                axis,
+                rect: containerRect,
+                scrollTop: scrollContainer.scrollTop,
+                scrollHeight: scrollContainer.scrollHeight,
+                clientHeight: scrollContainer.clientHeight,
+              }
+            : {
+                axis,
+                rect: containerRect,
+                scrollLeft: scrollContainer.scrollLeft,
+                scrollWidth: scrollContainer.scrollWidth,
+                clientWidth: scrollContainer.clientWidth,
+              };
       }
+
+      sendResponse({
+        scrollHeight: docScrollHeight,
+        viewportHeight,
+        viewportWidth,
+        devicePixelRatio,
+        initialScrollY,
+        title,
+        container,
+      });
       return;
     }
 
     if (message.type === "SCROLL_TO") {
-      if (scrollContainer && message.axis === "x") {
-        scrollContainer.scrollLeft = message.pos;
-      } else if (scrollContainer) {
-        scrollContainer.scrollTop = message.pos;
+      if (message.target === "container" && scrollContainer) {
+        if (message.axis === "x") {
+          scrollContainer.scrollLeft = message.pos;
+        } else {
+          scrollContainer.scrollTop = message.pos;
+        }
       } else {
-        window.scrollTo(0, message.pos);
+        window.scrollTo({ top: message.pos, left: 0, behavior: "instant" });
       }
       requestAnimationFrame(() => requestAnimationFrame(() => sendResponse({ ok: true })));
       return true;

@@ -57,7 +57,7 @@ async function capturePage(tabId, tab, metrics) {
   const shots = [];
   try {
     for (let i = 0; i < offsets.length; i++) {
-      await sendToTab(tabId, { type: "SCROLL_TO", pos: offsets[i] });
+      await sendToTab(tabId, { type: "SCROLL_TO", target: "window", pos: offsets[i] });
       // A partir de la 2ª captura se ocultan los elementos fixed/sticky (headers, banners)
       // para que no queden pegados y repetidos en cada tramo del canvas final.
       if (i === 1) await sendToTab(tabId, { type: "HIDE_FIXED_ELEMENTS" });
@@ -71,7 +71,7 @@ async function capturePage(tabId, tab, metrics) {
     if (offsets.length > 1) await sendToTab(tabId, { type: "SHOW_FIXED_ELEMENTS" }).catch(() => {});
   }
 
-  await sendToTab(tabId, { type: "SCROLL_TO", pos: initialScrollY });
+  await sendToTab(tabId, { type: "SCROLL_TO", target: "window", pos: initialScrollY });
 
   await chrome.storage.local.set({
     [STORAGE_KEY]: {
@@ -89,86 +89,101 @@ async function capturePage(tabId, tab, metrics) {
   });
 }
 
-async function captureContainer(tabId, tab, metrics) {
-  const {
-    viewportHeight,
-    viewportWidth,
-    devicePixelRatio,
-    title,
-    containerRect,
-    containerScrollTop,
-    containerScrollHeight,
-    containerClientHeight,
-  } = metrics;
-
-  const maxScrollTop = Math.max(containerScrollHeight - containerClientHeight, 0);
-  const offsets = buildOffsets(maxScrollTop, containerClientHeight);
+// Captura solo las páginas propias del contenedor (su scroll interno), asumiendo que
+// la ventana ya está posicionada en el paso exterior donde el contenedor es visible.
+async function captureContainerSubShots(tabId, windowId, container) {
+  const step = container.axis === "y" ? container.clientHeight : container.clientWidth;
+  const total = container.axis === "y" ? container.scrollHeight : container.scrollWidth;
+  const originalPos = container.axis === "y" ? container.scrollTop : container.scrollLeft;
+  const maxScroll = Math.max(total - step, 0);
+  const offsets = buildOffsets(maxScroll, step);
 
   const shots = [];
   for (let i = 0; i < offsets.length; i++) {
-    await sendToTab(tabId, { type: "SCROLL_TO", pos: offsets[i] });
-    chrome.action.setBadgeText({ text: `${i + 1}/${offsets.length}`, tabId });
+    await sendToTab(tabId, {
+      type: "SCROLL_TO",
+      target: "container",
+      axis: container.axis,
+      pos: offsets[i],
+    });
     await wait(SETTLE_DELAY_MS);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
     shots.push(dataUrl);
     if (i < offsets.length - 1) await wait(CAPTURE_INTERVAL_MS);
   }
 
-  await sendToTab(tabId, { type: "SCROLL_TO", pos: containerScrollTop });
+  await sendToTab(tabId, {
+    type: "SCROLL_TO",
+    target: "container",
+    axis: container.axis,
+    pos: originalPos,
+  });
+
+  return { shots, offsets };
+}
+
+// Combina el scroll normal de la página (si la hay) con el scroll interno de un
+// contenedor (tabla con scroll propio, vertical u horizontal) detectado dentro de ella.
+// En el paso exterior donde el contenedor queda a la vista, esa única captura se
+// reemplaza por la secuencia de sub-capturas de su propio scroll.
+async function captureHybrid(tabId, tab, metrics) {
+  const { scrollHeight, viewportHeight, viewportWidth, devicePixelRatio, initialScrollY, title, container } =
+    metrics;
+
+  const maxScrollTop = Math.max(scrollHeight - viewportHeight, 0);
+  const outerOffsets = buildOffsets(maxScrollTop, viewportHeight);
+  const containerStepIndex = Math.max(
+    outerOffsets.findIndex(
+      (offset) => container.rect.top >= offset && container.rect.top < offset + viewportHeight
+    ),
+    0
+  );
+
+  const outerShots = [];
+  let containerSubShots = null;
+  let containerOffsets = null;
+
+  try {
+    for (let i = 0; i < outerOffsets.length; i++) {
+      await sendToTab(tabId, { type: "SCROLL_TO", target: "window", pos: outerOffsets[i] });
+      if (i === 1) await sendToTab(tabId, { type: "HIDE_FIXED_ELEMENTS" });
+      chrome.action.setBadgeText({ text: `${i + 1}/${outerOffsets.length}`, tabId });
+      await wait(SETTLE_DELAY_MS);
+
+      if (i === containerStepIndex) {
+        const result = await captureContainerSubShots(tabId, tab.windowId, container);
+        containerSubShots = result.shots;
+        containerOffsets = result.offsets;
+        outerShots.push(null);
+      } else {
+        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+        outerShots.push(dataUrl);
+      }
+
+      if (i < outerOffsets.length - 1) await wait(CAPTURE_INTERVAL_MS);
+    }
+  } finally {
+    if (outerOffsets.length > 1) await sendToTab(tabId, { type: "SHOW_FIXED_ELEMENTS" }).catch(() => {});
+  }
+
+  await sendToTab(tabId, { type: "SCROLL_TO", target: "window", pos: initialScrollY });
 
   await chrome.storage.local.set({
     [STORAGE_KEY]: {
-      mode: "container",
-      shots,
-      offsets,
+      mode: "hybrid",
+      outerShots,
+      outerOffsets,
+      containerSubShots,
+      containerOffsets,
+      containerStepIndex,
+      containerAxis: container.axis,
+      containerRect: container.rect,
+      containerScrollSize: container.axis === "y" ? container.scrollHeight : container.scrollWidth,
+      containerClientSize: container.axis === "y" ? container.clientHeight : container.clientWidth,
       viewportHeight,
       viewportWidth,
       devicePixelRatio,
-      containerRect,
-      containerScrollHeight,
-      containerClientHeight,
-      pageUrl: tab.url,
-      pageTitle: title,
-      capturedAt: new Date().toISOString(),
-    },
-  });
-}
-
-async function captureContainerX(tabId, tab, metrics) {
-  const {
-    viewportWidth,
-    devicePixelRatio,
-    title,
-    containerRect,
-    containerScrollLeft,
-    containerScrollWidth,
-    containerClientWidth,
-  } = metrics;
-
-  const maxScrollLeft = Math.max(containerScrollWidth - containerClientWidth, 0);
-  const offsets = buildOffsets(maxScrollLeft, containerClientWidth);
-
-  const shots = [];
-  for (let i = 0; i < offsets.length; i++) {
-    await sendToTab(tabId, { type: "SCROLL_TO", pos: offsets[i], axis: "x" });
-    chrome.action.setBadgeText({ text: `${i + 1}/${offsets.length}`, tabId });
-    await wait(SETTLE_DELAY_MS);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-    shots.push(dataUrl);
-    if (i < offsets.length - 1) await wait(CAPTURE_INTERVAL_MS);
-  }
-
-  await sendToTab(tabId, { type: "SCROLL_TO", pos: containerScrollLeft, axis: "x" });
-
-  await chrome.storage.local.set({
-    [STORAGE_KEY]: {
-      mode: "container-x",
-      shots,
-      offsets,
-      viewportWidth,
-      devicePixelRatio,
-      containerRect,
-      containerClientWidth,
+      scrollHeight,
       pageUrl: tab.url,
       pageTitle: title,
       capturedAt: new Date().toISOString(),
@@ -184,10 +199,8 @@ async function captureFullPage(tabId, tab) {
     detectInternalScroll: settings.detectInternalScroll,
   });
 
-  if (metrics.mode === "container") {
-    await captureContainer(tabId, tab, metrics);
-  } else if (metrics.mode === "container-x") {
-    await captureContainerX(tabId, tab, metrics);
+  if (metrics.container) {
+    await captureHybrid(tabId, tab, metrics);
   } else {
     await capturePage(tabId, tab, metrics);
   }
