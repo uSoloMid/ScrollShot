@@ -124,6 +124,61 @@ async function stitchContainerShots(capture) {
   });
 }
 
+async function stitchContainerXShots(capture) {
+  const { shots, offsets, viewportWidth, devicePixelRatio, containerRect, containerClientWidth } =
+    capture;
+  const images = await Promise.all(shots.map(loadImage));
+
+  const dpr = devicePixelRatio || 1;
+  const rectTop = Math.round(containerRect.top * dpr);
+  const rectLeft = Math.round(containerRect.left * dpr);
+  const rectWidth = Math.round(containerRect.width * dpr);
+  const rectHeight = Math.round(containerRect.height * dpr);
+
+  const first = images[0];
+  const belowHeight = Math.max(first.height - (rectTop + rectHeight), 0);
+
+  canvas.width = Math.round(viewportWidth * dpr);
+  canvas.height = rectTop + rectHeight * images.length + belowHeight;
+
+  // Franja estática de arriba (header, breadcrumbs) — una sola vez.
+  ctx.drawImage(first, 0, 0, first.width, rectTop, 0, 0, first.width, rectTop);
+
+  // En vez de ensanchar el lienzo, cada "página" de columnas del contenedor se
+  // apila hacia abajo, recortando las columnas que ya se vieron en la página anterior.
+  let cursorY = rectTop;
+  images.forEach((img, i) => {
+    if (i === 0) {
+      ctx.drawImage(img, 0, rectTop, first.width, rectHeight, 0, cursorY, first.width, rectHeight);
+      cursorY += rectHeight;
+      return;
+    }
+
+    // fondo de la fila: conserva los márgenes laterales del contenedor, si los hay
+    ctx.drawImage(first, 0, rectTop, first.width, rectHeight, 0, cursorY, first.width, rectHeight);
+
+    const prevRightLocal = offsets[i - 1] + containerClientWidth;
+    const overlap = Math.max(prevRightLocal - offsets[i], 0);
+    const overlapPx = Math.round(overlap * dpr);
+    const sx = rectLeft + overlapPx;
+    const sw = rectWidth - overlapPx;
+    if (sw > 0) {
+      ctx.drawImage(img, sx, rectTop, sw, rectHeight, sx, cursorY, sw, rectHeight);
+    }
+    cursorY += rectHeight;
+  });
+
+  // Franja estática de abajo (footer), tomada del primer frame y reubicada después
+  // de todas las páginas de columnas.
+  if (belowHeight > 0) {
+    ctx.drawImage(
+      first,
+      0, rectTop + rectHeight, first.width, belowHeight,
+      0, cursorY, first.width, belowHeight
+    );
+  }
+}
+
 function drawAnnotationBand(targetCtx, width, y, text) {
   const bandHeight = 34;
   targetCtx.save();
@@ -214,6 +269,8 @@ copyImageBtn.addEventListener("click", async () => {
   capturedAtInput.value = formatLocalDateTime(capture.capturedAt);
   if (capture.mode === "container") {
     await stitchContainerShots(capture);
+  } else if (capture.mode === "container-x") {
+    await stitchContainerXShots(capture);
   } else {
     await stitchShots(capture);
   }

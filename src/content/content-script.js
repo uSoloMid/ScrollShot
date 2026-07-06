@@ -26,24 +26,33 @@ if (!window.__scrollshotContentScriptLoaded) {
     hiddenFixedElements = [];
   }
 
-  function isInternallyScrollable(el) {
-    const overflowY = window.getComputedStyle(el).overflowY;
-    return (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 1;
+  function getScrollAxes(el) {
+    const style = window.getComputedStyle(el);
+    const canY =
+      (style.overflowY === "auto" || style.overflowY === "scroll") &&
+      el.scrollHeight > el.clientHeight + 1;
+    const canX =
+      (style.overflowX === "auto" || style.overflowX === "scroll") &&
+      el.scrollWidth > el.clientWidth + 1;
+    return { canX, canY };
   }
 
   function findInternalScrollContainer() {
     let best = null;
+    let bestAxes = null;
     let bestArea = 0;
     document.querySelectorAll("body *").forEach((el) => {
-      if (!isInternallyScrollable(el)) return;
+      const axes = getScrollAxes(el);
+      if (!axes.canX && !axes.canY) return;
       const rect = el.getBoundingClientRect();
       const area = rect.width * rect.height;
       if (area > bestArea) {
         bestArea = area;
         best = el;
+        bestAxes = axes;
       }
     });
-    return best;
+    return best ? { el: best, axes: bestAxes } : null;
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -71,23 +80,38 @@ if (!window.__scrollshotContentScriptLoaded) {
 
       scrollContainer = null;
       const pageItselfScrolls = docScrollHeight > viewportHeight + 1;
-      if (!pageItselfScrolls && message.detectInternalScroll) {
-        scrollContainer = findInternalScrollContainer();
-      }
+      const found =
+        !pageItselfScrolls && message.detectInternalScroll ? findInternalScrollContainer() : null;
 
-      if (scrollContainer) {
+      if (found) {
+        scrollContainer = found.el;
         const rect = scrollContainer.getBoundingClientRect();
-        sendResponse({
-          mode: "container",
-          viewportHeight,
-          viewportWidth,
-          devicePixelRatio,
-          title,
-          containerRect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
-          containerScrollTop: scrollContainer.scrollTop,
-          containerScrollHeight: scrollContainer.scrollHeight,
-          containerClientHeight: scrollContainer.clientHeight,
-        });
+        const containerRect = { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+
+        if (found.axes.canY) {
+          sendResponse({
+            mode: "container",
+            viewportHeight,
+            viewportWidth,
+            devicePixelRatio,
+            title,
+            containerRect,
+            containerScrollTop: scrollContainer.scrollTop,
+            containerScrollHeight: scrollContainer.scrollHeight,
+            containerClientHeight: scrollContainer.clientHeight,
+          });
+        } else {
+          sendResponse({
+            mode: "container-x",
+            viewportWidth,
+            devicePixelRatio,
+            title,
+            containerRect,
+            containerScrollLeft: scrollContainer.scrollLeft,
+            containerScrollWidth: scrollContainer.scrollWidth,
+            containerClientWidth: scrollContainer.clientWidth,
+          });
+        }
       } else {
         sendResponse({
           mode: "page",
@@ -103,10 +127,12 @@ if (!window.__scrollshotContentScriptLoaded) {
     }
 
     if (message.type === "SCROLL_TO") {
-      if (scrollContainer) {
-        scrollContainer.scrollTop = message.y;
+      if (scrollContainer && message.axis === "x") {
+        scrollContainer.scrollLeft = message.pos;
+      } else if (scrollContainer) {
+        scrollContainer.scrollTop = message.pos;
       } else {
-        window.scrollTo(0, message.y);
+        window.scrollTo(0, message.pos);
       }
       requestAnimationFrame(() => requestAnimationFrame(() => sendResponse({ ok: true })));
       return true;
