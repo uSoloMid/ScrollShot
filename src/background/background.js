@@ -1,6 +1,8 @@
 const CAPTURE_INTERVAL_MS = 550; // chrome.tabs.captureVisibleTab limita a ~2 llamadas/seg
 const SETTLE_DELAY_MS = 200; // margen para repintado/lazy-load tras cada scroll
 const STORAGE_KEY = "scrollshot_capture";
+const SETTINGS_KEY = "scrollshot_settings";
+const DEFAULT_SETTINGS = { detectInternalScroll: true };
 
 function sendToTab(tabId, message) {
   return new Promise((resolve, reject) => {
@@ -18,6 +20,20 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildOffsets(maxScrollTop, step) {
+  const offsets = [];
+  for (let y = 0; y < maxScrollTop; y += step) {
+    offsets.push(Math.min(y, maxScrollTop));
+  }
+  offsets.push(maxScrollTop);
+  return offsets;
+}
+
+async function getSettings() {
+  const { [SETTINGS_KEY]: settings } = await chrome.storage.sync.get(SETTINGS_KEY);
+  return { ...DEFAULT_SETTINGS, ...settings };
+}
+
 async function ensureContentScript(tabId) {
   try {
     await chrome.scripting.executeScript({
@@ -31,18 +47,12 @@ async function ensureContentScript(tabId) {
   }
 }
 
-async function captureFullPage(tabId, tab) {
-  await ensureContentScript(tabId);
-  const metrics = await sendToTab(tabId, { type: "GET_METRICS" });
+async function capturePage(tabId, tab, metrics) {
   const { scrollHeight, viewportHeight, viewportWidth, devicePixelRatio, initialScrollY, title } =
     metrics;
 
   const maxScrollTop = Math.max(scrollHeight - viewportHeight, 0);
-  const offsets = [];
-  for (let y = 0; y < maxScrollTop; y += viewportHeight) {
-    offsets.push(Math.min(y, maxScrollTop));
-  }
-  offsets.push(maxScrollTop);
+  const offsets = buildOffsets(maxScrollTop, viewportHeight);
 
   const shots = [];
   try {
@@ -65,6 +75,7 @@ async function captureFullPage(tabId, tab) {
 
   await chrome.storage.local.set({
     [STORAGE_KEY]: {
+      mode: "page",
       shots,
       offsets,
       viewportHeight,
@@ -76,6 +87,66 @@ async function captureFullPage(tabId, tab) {
       capturedAt: new Date().toISOString(),
     },
   });
+}
+
+async function captureContainer(tabId, tab, metrics) {
+  const {
+    viewportHeight,
+    viewportWidth,
+    devicePixelRatio,
+    title,
+    containerRect,
+    containerScrollTop,
+    containerScrollHeight,
+    containerClientHeight,
+  } = metrics;
+
+  const maxScrollTop = Math.max(containerScrollHeight - containerClientHeight, 0);
+  const offsets = buildOffsets(maxScrollTop, containerClientHeight);
+
+  const shots = [];
+  for (let i = 0; i < offsets.length; i++) {
+    await sendToTab(tabId, { type: "SCROLL_TO", y: offsets[i] });
+    chrome.action.setBadgeText({ text: `${i + 1}/${offsets.length}`, tabId });
+    await wait(SETTLE_DELAY_MS);
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    shots.push(dataUrl);
+    if (i < offsets.length - 1) await wait(CAPTURE_INTERVAL_MS);
+  }
+
+  await sendToTab(tabId, { type: "SCROLL_TO", y: containerScrollTop });
+
+  await chrome.storage.local.set({
+    [STORAGE_KEY]: {
+      mode: "container",
+      shots,
+      offsets,
+      viewportHeight,
+      viewportWidth,
+      devicePixelRatio,
+      containerRect,
+      containerScrollHeight,
+      containerClientHeight,
+      pageUrl: tab.url,
+      pageTitle: title,
+      capturedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function captureFullPage(tabId, tab) {
+  await ensureContentScript(tabId);
+  const settings = await getSettings();
+  const metrics = await sendToTab(tabId, {
+    type: "GET_METRICS",
+    detectInternalScroll: settings.detectInternalScroll,
+  });
+
+  if (metrics.mode === "container") {
+    await captureContainer(tabId, tab, metrics);
+  } else {
+    await capturePage(tabId, tab, metrics);
+  }
 
   await chrome.tabs.create({ url: chrome.runtime.getURL("src/editor/editor.html") });
 }

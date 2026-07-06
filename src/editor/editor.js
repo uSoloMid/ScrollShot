@@ -67,6 +67,63 @@ async function stitchShots(capture) {
   });
 }
 
+async function stitchContainerShots(capture) {
+  const {
+    shots,
+    offsets,
+    viewportWidth,
+    viewportHeight,
+    devicePixelRatio,
+    containerRect,
+    containerScrollHeight,
+    containerClientHeight,
+  } = capture;
+  const images = await Promise.all(shots.map(loadImage));
+
+  const dpr = devicePixelRatio || 1;
+  const rectTop = Math.round(containerRect.top * dpr);
+  const rectLeft = Math.round(containerRect.left * dpr);
+  const rectWidth = Math.round(containerRect.width * dpr);
+  const rectHeight = Math.round(containerRect.height * dpr);
+  const extra = Math.round((containerScrollHeight - containerClientHeight) * dpr);
+
+  canvas.width = Math.round(viewportWidth * dpr);
+  canvas.height = Math.round(viewportHeight * dpr) + extra;
+
+  // El primer frame aporta todo lo estático fuera del contenedor (header, márgenes,
+  // footer). Lo que queda debajo del contenedor se reubica más abajo, empujado por
+  // el alto extra que agrega el contenido oculto por el scroll interno.
+  const first = images[0];
+  ctx.drawImage(first, 0, 0, first.width, rectTop, 0, 0, first.width, rectTop);
+  const belowHeight = first.height - (rectTop + rectHeight);
+  if (belowHeight > 0) {
+    ctx.drawImage(
+      first,
+      0, rectTop + rectHeight, first.width, belowHeight,
+      0, rectTop + rectHeight + extra, first.width, belowHeight
+    );
+  }
+
+  images.forEach((img, i) => {
+    const destY = rectTop + Math.round(offsets[i] * dpr);
+    if (i === 0) {
+      ctx.drawImage(img, rectLeft, rectTop, rectWidth, rectHeight, rectLeft, destY, rectWidth, rectHeight);
+      return;
+    }
+    const prevBottom = rectTop + Math.round((offsets[i - 1] + containerClientHeight) * dpr);
+    if (destY >= prevBottom) {
+      ctx.drawImage(img, rectLeft, rectTop, rectWidth, rectHeight, rectLeft, destY, rectWidth, rectHeight);
+      return;
+    }
+    // el último tramo se solapa con el anterior (se recortó al fondo real del contenedor):
+    // solo se dibuja la porción inferior que aún no se había pintado.
+    const overlap = prevBottom - destY;
+    const sourceY = rectTop + overlap;
+    const sourceHeight = rectHeight - overlap;
+    ctx.drawImage(img, rectLeft, sourceY, rectWidth, sourceHeight, rectLeft, prevBottom, rectWidth, sourceHeight);
+  });
+}
+
 function drawAnnotationBand(targetCtx, width, y, text) {
   const bandHeight = 34;
   targetCtx.save();
@@ -155,5 +212,9 @@ copyImageBtn.addEventListener("click", async () => {
   const capture = await loadCapture();
   pageUrlInput.value = capture.pageUrl;
   capturedAtInput.value = formatLocalDateTime(capture.capturedAt);
-  await stitchShots(capture);
+  if (capture.mode === "container") {
+    await stitchContainerShots(capture);
+  } else {
+    await stitchShots(capture);
+  }
 })();

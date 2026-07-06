@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>ScrollShot — Opciones</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+        max-width: 520px;
+        margin: 48px auto;
+        padding: 0 20px;
+      }
+      h1 {
+        font-size: 18px;
+        margin-bottom: 4px;
+      }
+      p.subtitle {
+        font-size: 13px;
+        color: #94a3b8;
+        margin-top: 0;
+      }
+      label {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 16px 0;
+        border-top: 1px solid #1e293b;
+        cursor: pointer;
+      }
+      .option-text strong {
+        display: block;
+        font-size: 14px;
+      }
+      .option-text span {
+        display: block;
+        font-size: 12px;
+        color: #94a3b8;
+        margin-top: 4px;
+      }
+      input[type="checkbox"] {
+        margin-top: 3px;
+        width: 16px;
+        height: 16px;
+        flex: none;
+      }
+      #saved {
+        font-size: 12px;
+        color: #4ade80;
+        height: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ScrollShot — Opciones</h1>
+    <p class="subtitle">Estas opciones se guardan y aplican a todas tus capturas.</p>
+    <label>
+      <input type="checkbox" id="detect-internal-scroll" />
+      <span class="option-text">
+        <strong>Detectar contenedores con scroll interno</strong>
+        <span>
+          Actívalo para páginas donde el scroll real ocurre dentro de un elemento en vez de
+          en toda la ventana (ej. algunas páginas del SAT). Experimental: en páginas con
+          varios widgets con scroll propio (menús, bloques de código, etc.) podría elegir
+          el contenedor incorrecto; desactívalo si notas capturas raras.
+        </span>
+      </span>
+    </label>
+    <div id="saved"></div>
+    <script src="options.js"></script>
+  </body>
+</html>
